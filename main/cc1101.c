@@ -33,6 +33,7 @@ static esp_err_t transfer(uint8_t *tx, uint8_t *rx, size_t length)
     esp_err_t err = spi_device_acquire_bus(device, portMAX_DELAY);
     if (err != ESP_OK) return err;
     gpio_set_level(RF_CS, 0);
+    esp_rom_delay_us(2);
     err = ready();
     if (err == ESP_OK) {
         spi_transaction_t transaction = {.length = length * 8, .tx_buffer = tx, .rx_buffer = rx};
@@ -40,7 +41,9 @@ static esp_err_t transfer(uint8_t *tx, uint8_t *rx, size_t length)
         // Reset completion can take longer than the SPI transaction itself.
         if (err == ESP_OK && tx[0] == 0x30) err = ready();
     }
+    esp_rom_delay_us(2);
     gpio_set_level(RF_CS, 1);
+    esp_rom_delay_us(5);
     spi_device_release_bus(device);
     return err;
 }
@@ -69,13 +72,20 @@ static esp_err_t strobe(uint8_t command)
 static esp_err_t wait_state(uint8_t wanted)
 {
     int64_t deadline = esp_timer_get_time() + 50000;
+    uint8_t last_state = 0xFF;
     do {
         uint8_t state = 0;
         esp_err_t err = read_reg(0x35, &state);
         if (err != ESP_OK) return err;
+        last_state = state;
         if ((state & 0x1F) == wanted) return ESP_OK;
         vTaskDelay(1);
     } while (esp_timer_get_time() < deadline);
+    uint8_t ver = 0xFF, pkt = 0xFF;
+    read_reg(0x31, &ver);
+    read_reg(0x08, &pkt);
+    ESP_LOGE(TAG, "wait_state(0x%02X) timeout, last MARCSTATE=0x%02X (raw=0x%02X), after: VER=0x%02X PKTCTRL0=0x%02X",
+             wanted, last_state & 0x1F, last_state, ver, pkt);
     return ESP_ERR_TIMEOUT;
 }
 
@@ -148,10 +158,16 @@ esp_err_t cc1101_configure(const rf_settings_t *s)
     uint8_t pa[] = {0x7E, 0, 0x60, 0, 0, 0, 0, 0, 0};
     ESP_RETURN_ON_ERROR(transfer(pa, NULL, sizeof(pa)), TAG, "PATABLE");
     uint8_t check = 0;
-    ESP_RETURN_ON_ERROR(read_reg(0x08, &check), TAG, "readback");
-    if (check != 0x30) return ESP_ERR_INVALID_RESPONSE;
-    ESP_RETURN_ON_ERROR(read_reg(0x12, &check), TAG, "readback");
-    if (check != 0x30) return ESP_ERR_INVALID_RESPONSE;
+    ESP_RETURN_ON_ERROR(read_reg(0x08, &check), TAG, "readback 0x08");
+    if (check != 0x30) {
+        ESP_LOGE(TAG, "readback 0x08 (PKTCTRL0)=0x%02X, expected 0x30", check);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    ESP_RETURN_ON_ERROR(read_reg(0x12, &check), TAG, "readback 0x12");
+    if (check != 0x30) {
+        ESP_LOGE(TAG, "readback 0x12 (MDMCFG2)=0x%02X, expected 0x30", check);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
     return cc1101_receive();
 }
 
@@ -167,24 +183,37 @@ esp_err_t cc1101_init(const rf_settings_t *s)
         };
         ESP_RETURN_ON_ERROR(spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_DISABLED), TAG, "SPI bus");
         spi_device_interface_config_t cfg = {
-            .clock_speed_hz = 2000000, .mode = 0, .spics_io_num = -1, .queue_size = 1,
+            .clock_speed_hz = 500000, .mode = 0, .spics_io_num = -1, .queue_size = 1,
         };
         esp_err_t err = spi_bus_add_device(SPI2_HOST, &cfg, &device);
         if (err != ESP_OK) { spi_bus_free(SPI2_HOST); return err; }
         ESP_RETURN_ON_ERROR(gpio_set_pull_mode(RF_MISO, GPIO_PULLUP_ONLY), TAG, "MISO pull-up");
     }
-    gpio_set_level(RF_CS, 1);
-    esp_rom_delay_us(5);
-    gpio_set_level(RF_CS, 0);
-    esp_rom_delay_us(10);
-    gpio_set_level(RF_CS, 1);
-    esp_rom_delay_us(45);
-    ESP_RETURN_ON_ERROR(strobe(0x30), TAG, "reset (check wiring / power)");
-    uint8_t version = 0;
-    ESP_RETURN_ON_ERROR(read_reg(0x31, &version), TAG, "VERSION");
-    if (version == 0 || version == 0xFF) return ESP_ERR_INVALID_RESPONSE;
-    ESP_LOGI(TAG, "VERSION=0x%02X", version);
-    return cc1101_configure(s);
+    esp_err_t err = ESP_FAIL;
+    for (int attempt = 1; attempt <= 3; ++attempt) {
+        gpio_set_level(RF_CS, 1);
+        esp_rom_delay_us(10);
+        gpio_set_level(RF_CS, 0);
+        esp_rom_delay_us(10);
+        gpio_set_level(RF_CS, 1);
+        esp_rom_delay_us(60);
+        err = strobe(0x30);
+        if (err == ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(2));
+            uint8_t version = 0;
+            err = read_reg(0x31, &version);
+            if (err == ESP_OK && (version == 0 || version == 0xFF))
+                err = ESP_ERR_INVALID_RESPONSE;
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "VERSION=0x%02X", version);
+                err = cc1101_configure(s);
+            }
+        }
+        if (err == ESP_OK) return ESP_OK;
+        ESP_LOGW(TAG, "CC1101 init attempt %d/3 failed: %s", attempt, esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return err;
 }
 
 esp_err_t cc1101_status(uint8_t *version, uint8_t *state, int *rssi)
