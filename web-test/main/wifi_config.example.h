@@ -1,0 +1,3 @@
+#pragma once
+#define TEST_WIFI_SSID "YOUR_2_4_GHZ_WIFI"
+#define TEST_WIFI_PASSWORD "YOUR_WIFI_PASSWORD"

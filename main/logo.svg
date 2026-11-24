@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>一盏 · 长条台灯</title>
+  <rect width="64" height="64" rx="18" fill="#e1e7d7"/>
+  <path d="M17 44L22 25H42L47 44Z" fill="#c7d3b8" opacity=".8"/>
+  <path d="M13 23H51" stroke="#344632" stroke-width="5" stroke-linecap="round"/>
+  <path d="M36 25C32 26 30 30 30 36V48" stroke="#344632" stroke-width="4" stroke-linecap="round"/>
+  <path d="M23 49H38" stroke="#344632" stroke-width="4" stroke-linecap="round"/>
+  <path d="M18 28H46" stroke="#f8f4d8" stroke-width="2" stroke-linecap="round"/>
+</svg>

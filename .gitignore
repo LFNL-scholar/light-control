@@ -1,0 +1,12 @@
+.DS_Store
+build/
+build-uart/
+sdkconfig
+sdkconfig.old
+managed_components/
+.vscode/
+__pycache__/
+web-test/main/wifi_config.local.h
+web-test/main/generated/
+main/wifi_config.local.h
+main/generated/
